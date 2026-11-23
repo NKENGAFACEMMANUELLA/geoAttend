@@ -1,0 +1,233 @@
+### Use with the free "REST Client" extension in VS Code (click "Send Request").
+@base = http://localhost:3000
+
+### Wake-up / health
+GET {{base}}/health
+
+###
+GET {{base}}/health/db
+
+### Login (employee)
+# @name login
+POST {{base}}/api/v1/auth/login
+Content-Type: application/json
+
+{ "email": "emmanuella@geoattend.app", "password": "Employee@123", "portal": "employee" }
+
+### Who am I?
+@token = {{login.response.body.data.accessToken}}
+GET {{base}}/api/v1/auth/me
+Authorization: Bearer {{token}}
+
+### Wrong portal -> 403
+POST {{base}}/api/v1/auth/login
+Content-Type: application/json
+
+{ "email": "emmanuella@geoattend.app", "password": "Employee@123", "portal": "admin" }
+
+### Register
+POST {{base}}/api/v1/auth/register
+Content-Type: application/json
+
+{ "name": "Test User", "email": "test.user@geoattend.app", "employeeId": "EMP900", "password": "Test1234" }
+
+### Forgot password (the code is printed in the server console in development)
+POST {{base}}/api/v1/auth/forgot
+Content-Type: application/json
+
+{ "email": "emmanuella@geoattend.app" }
+
+### Verify code -> returns resetToken
+POST {{base}}/api/v1/auth/verify-code
+Content-Type: application/json
+
+{ "email": "emmanuella@geoattend.app", "code": "1234" }
+
+### Refresh
+POST {{base}}/api/v1/auth/refresh
+Content-Type: application/json
+
+{ "refreshToken": "{{login.response.body.data.refreshToken}}" }
+
+### Update profile
+PATCH {{base}}/api/v1/auth/me
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "phone": "+237 677 123 456" }
+
+
+################################################################
+### PHASE 2: run these as the ADMIN
+################################################################
+
+### Admin login
+# @name adminLogin
+POST {{base}}/api/v1/auth/login
+Content-Type: application/json
+
+{ "email": "admin@geoattend.app", "password": "Admin@123", "portal": "admin" }
+
+###
+@admin = {{adminLogin.response.body.data.accessToken}}
+
+### Workplaces
+GET {{base}}/api/v1/workplaces
+Authorization: Bearer {{admin}}
+
+### Add a workplace
+POST {{base}}/api/v1/workplaces
+Authorization: Bearer {{admin}}
+Content-Type: application/json
+
+{ "name": "Douala Office", "address": "Douala, Cameroon", "latitude": 4.0511, "longitude": 9.7679, "radius": 120 }
+
+### Departments (with HOD and employee count)
+GET {{base}}/api/v1/departments
+Authorization: Bearer {{admin}}
+
+### Add a department
+POST {{base}}/api/v1/departments
+Authorization: Bearer {{admin}}
+Content-Type: application/json
+
+{ "name": "Logistics", "description": "Deliveries and stock" }
+
+### People who can be made HOD
+GET {{base}}/api/v1/departments/hod-candidates
+Authorization: Bearer {{admin}}
+
+### Employees
+GET {{base}}/api/v1/employees
+Authorization: Bearer {{admin}}
+
+### Add an employee (they set their password with "Forgot password")
+POST {{base}}/api/v1/employees
+Authorization: Bearer {{admin}}
+Content-Type: application/json
+
+{ "name": "Nora Fon", "code": "EMP120", "email": "nora.fon@geoattend.app", "phone": "+237 677 555 120",
+  "department": "IT", "position": "Software Engineer", "workplace": "Main Office" }
+
+### Dashboard numbers
+GET {{base}}/api/v1/admin/overview
+Authorization: Bearer {{admin}}
+
+### An employee must NOT be able to do this (expect 403)
+# @name empLogin
+POST {{base}}/api/v1/auth/login
+Content-Type: application/json
+
+{ "email": "emmanuella@geoattend.app", "password": "Employee@123", "portal": "employee" }
+
+###
+GET {{base}}/api/v1/employees
+Authorization: Bearer {{empLogin.response.body.data.accessToken}}
+
+
+################################################################
+### PHASES 3-6
+################################################################
+# Office coordinates in the seed data: 4.1527, 9.2410 (radius 100 m)
+
+### Employee: server geofence check
+POST {{base}}/api/v1/attendance/verify-location
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "latitude": 4.1528, "longitude": 9.2410, "accuracy": 8 }
+
+### Employee: clock in (inside the area)
+POST {{base}}/api/v1/attendance/clock-in
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "latitude": 4.1528, "longitude": 9.2410, "accuracy": 8 }
+
+### Outside the area -> 422
+POST {{base}}/api/v1/attendance/clock-in
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "latitude": 4.20, "longitude": 9.30, "accuracy": 8 }
+
+### Fake GPS -> 422
+POST {{base}}/api/v1/attendance/verify-location
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "latitude": 4.1528, "longitude": 9.2410, "accuracy": 8, "mocked": true }
+
+### Employee: clock out
+POST {{base}}/api/v1/attendance/clock-out
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "latitude": 4.1528, "longitude": 9.2410, "accuracy": 8 }
+
+### My attendance
+GET {{base}}/api/v1/attendance/me
+Authorization: Bearer {{token}}
+
+### Offline sync (captured earlier on the phone)
+POST {{base}}/api/v1/attendance/sync
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "records": [ { "clientId": "demo-1", "type": "in", "capturedAt": "2026-10-19T07:05:00Z", "latitude": 4.1528, "longitude": 9.2410, "accuracy": 8 } ] }
+
+### Employee: request leave
+POST {{base}}/api/v1/leave
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "type": "Annual Leave", "start": "2026-12-01", "end": "2026-12-03", "reason": "Family event" }
+
+### Employee: my leave
+GET {{base}}/api/v1/leave/mine
+Authorization: Bearer {{token}}
+
+### Employee: my notifications
+GET {{base}}/api/v1/notifications
+Authorization: Bearer {{token}}
+
+### HOD login
+# @name hodLogin
+POST {{base}}/api/v1/auth/login
+Content-Type: application/json
+
+{ "email": "james.wilson@geoattend.app", "password": "Hod@1234", "portal": "hod" }
+
+###
+@hod = {{hodLogin.response.body.data.accessToken}}
+
+### HOD: leave waiting for approval (copy an id into the next request)
+GET {{base}}/api/v1/leave/pending
+Authorization: Bearer {{hod}}
+
+### HOD: approve (stage 1) -> goes to HR
+PATCH {{base}}/api/v1/leave/PASTE-LEAVE-ID/decision
+Authorization: Bearer {{hod}}
+Content-Type: application/json
+
+{ "approved": true }
+
+### HOD: team attendance today
+GET {{base}}/api/v1/team/attendance
+Authorization: Bearer {{hod}}
+
+### HOD: correction requests
+GET {{base}}/api/v1/corrections/pending
+Authorization: Bearer {{hod}}
+
+### HOD: weekly report
+GET {{base}}/api/v1/reports?type=Weekly%20Attendance
+Authorization: Bearer {{hod}}
+
+### Admin: HR stage of leave
+GET {{base}}/api/v1/leave/pending
+Authorization: Bearer {{admin}}
+
+### Admin: organisation report for one department
+GET {{base}}/api/v1/reports?type=Attendance%20by%20Employee&department=Sales
+Authorization: Bearer {{admin}}

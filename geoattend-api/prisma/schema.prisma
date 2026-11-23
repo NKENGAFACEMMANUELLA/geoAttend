@@ -1,0 +1,265 @@
+// GeoAttend database schema.
+// Entities and attributes follow the project ER diagram. Fields marked
+// "(+)" are additions the mobile app needs; add them to the ERD too.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  employee
+  hod
+  admin
+}
+
+enum EmployeeStatus {
+  active
+  inactive
+}
+
+enum AttendanceStatus {
+  present
+  late
+  absent
+  leave
+}
+
+enum SyncStatus {
+  synced
+  pending
+}
+
+enum AttendanceSource {
+  online
+  offline
+}
+
+/// Two-stage approval: HOD first, then HR (admin).
+enum LeaveStatus {
+  pending_hod
+  pending_hr
+  approved
+  rejected
+}
+
+enum CorrectionStatus {
+  pending
+  approved
+  rejected
+}
+
+enum NotificationType {
+  clock_in
+  leave_request
+  leave_approved
+  leave_rejected
+  correction_request
+  correction_approved
+  correction_rejected
+  reminder
+  attendance_alert
+}
+
+model User {
+  id           String   @id @default(uuid()) @map("user_id")
+  name         String
+  email        String   @unique
+  phone        String? // (+)
+  passwordHash String   @map("password_hash")
+  role         Role
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  employee          Employee?
+  headedDepartments Department[]        @relation("DepartmentHod")
+  notifications     Notification[]
+  auditLogs         AuditLog[]
+  refreshTokens     RefreshToken[]
+  resetCodes        PasswordResetCode[]
+
+  @@map("users")
+}
+
+model Department {
+  id          String  @id @default(uuid()) @map("department_id")
+  name        String  @unique
+  description String? // (+)
+  isActive    Boolean @default(true) @map("is_active") // (+)
+  hodUserId   String? @map("hod_user_id")
+  hod         User?   @relation("DepartmentHod", fields: [hodUserId], references: [id], onDelete: SetNull)
+
+  employees Employee[]
+
+  @@map("departments")
+}
+
+model Workplace {
+  id                   String  @id @default(uuid()) @map("workplace_id")
+  name                 String  @unique
+  address              String  @default("") // (+)
+  latitude             Float
+  longitude            Float
+  geofenceRadiusMeters Int     @default(100) @map("geofence_radius_meters")
+  isActive             Boolean @default(true) @map("is_active") // (+)
+
+  employees Employee[]
+
+  @@map("workplaces")
+}
+
+model Schedule {
+  id                 String @id @default(uuid()) @map("schedule_id")
+  name               String @unique
+  startTime          String @map("start_time") // "08:00"
+  endTime            String @map("end_time") // "17:00"
+  gracePeriodMinutes Int    @default(15) @map("grace_period_minutes")
+
+  employees Employee[]
+
+  @@map("schedules")
+}
+
+model Employee {
+  id           String         @id @default(uuid()) @map("employee_id")
+  userId       String         @unique @map("user_id")
+  departmentId String?        @map("department_id") // nullable: assigned by admin after sign-up
+  workplaceId  String?        @map("workplace_id") // nullable: assigned by admin after sign-up
+  scheduleId   String?        @map("schedule_id") // nullable: assigned by admin after sign-up
+  employeeCode String         @unique @map("employee_code")
+  hireDate     DateTime       @default(now()) @map("hire_date") @db.Date
+  status       EmployeeStatus @default(active)
+  position     String? // (+) job title shown on the profile
+
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  department  Department?  @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  workplace   Workplace?   @relation(fields: [workplaceId], references: [id], onDelete: SetNull)
+  schedule    Schedule?    @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
+  attendance  Attendance[]
+  leaves      LeaveRequest[]
+  corrections AttendanceCorrection[]
+
+  @@map("employees")
+}
+
+model Attendance {
+  id               String           @id @default(uuid()) @map("attendance_id")
+  employeeId       String           @map("employee_id")
+  date             DateTime         @db.Date
+  clockInTime      DateTime?        @map("clock_in_time")
+  clockOutTime     DateTime?        @map("clock_out_time")
+  status           AttendanceStatus
+  syncStatus       SyncStatus       @default(synced) @map("sync_status")
+  source           AttendanceSource @default(online) // (+)
+  latitude         Float? // (+)
+  longitude        Float? // (+)
+  distanceMeters   Float?           @map("distance_meters") // (+)
+  locationVerified Boolean          @default(true) @map("location_verified") // (+)
+  createdAt        DateTime         @default(now()) @map("created_at") // (+)
+
+  employee    Employee               @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  corrections AttendanceCorrection[]
+
+  @@unique([employeeId, date])
+  @@map("attendance")
+}
+
+model AttendanceCorrection {
+  id                String           @id @default(uuid()) @map("correction_id")
+  attendanceId      String           @map("attendance_id")
+  employeeId        String           @map("employee_id")
+  requestedClockIn  DateTime         @map("requested_clock_in") // (+)
+  requestedClockOut DateTime         @map("requested_clock_out") // (+)
+  reason            String           @default("") // (+)
+  status            CorrectionStatus @default(pending)
+  reviewerId        String?          @map("reviewer_id") // (+)
+  decidedAt         DateTime?        @map("decided_at") // (+)
+  createdAt         DateTime         @default(now()) @map("created_at") // (+)
+
+  attendance Attendance @relation(fields: [attendanceId], references: [id], onDelete: Cascade)
+  employee   Employee   @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@map("attendance_corrections")
+}
+
+model LeaveRequest {
+  id           String      @id @default(uuid()) @map("leave_id")
+  employeeId   String      @map("employee_id")
+  leaveType    String      @map("leave_type")
+  startDate    DateTime    @map("start_date") @db.Date
+  endDate      DateTime    @map("end_date") @db.Date
+  reason       String      @default("") // (+)
+  status       LeaveStatus @default(pending_hod)
+  hodReviewerId String?    @map("hod_reviewer_id") // (+)
+  hodDecidedAt DateTime?   @map("hod_decided_at") // (+)
+  hrReviewerId String?     @map("hr_reviewer_id") // (+)
+  hrDecidedAt  DateTime?   @map("hr_decided_at") // (+)
+  createdAt    DateTime    @default(now()) @map("created_at") // (+)
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@map("leave_requests")
+}
+
+model Notification {
+  id        String           @id @default(uuid()) @map("notification_id")
+  userId    String           @map("user_id")
+  type      NotificationType
+  title     String // (+)
+  message   String
+  isRead    Boolean          @default(false) @map("is_read")
+  createdAt DateTime         @default(now()) @map("created_at") // (+)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead])
+  @@map("notifications")
+}
+
+model AuditLog {
+  id          String   @id @default(uuid()) @map("log_id")
+  userId      String?  @map("user_id")
+  action      String
+  targetTable String   @map("target_table")
+  targetId    String?  @map("target_id") // (+)
+  timestamp   DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@map("audit_logs")
+}
+
+/// (+) Not in the ERD: needed for secure sessions.
+model RefreshToken {
+  id        String    @id @default(uuid())
+  userId    String    @map("user_id")
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at")
+  revokedAt DateTime? @map("revoked_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+/// (+) Not in the ERD: 4-digit codes for "Forgot password".
+model PasswordResetCode {
+  id        String    @id @default(uuid())
+  userId    String    @map("user_id")
+  codeHash  String    @map("code_hash")
+  expiresAt DateTime  @map("expires_at")
+  attempts  Int       @default(0)
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("password_reset_codes")
+}
